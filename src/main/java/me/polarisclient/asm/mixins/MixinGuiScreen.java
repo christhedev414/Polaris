@@ -87,7 +87,7 @@ public abstract class MixinGuiScreen extends Gui {
             if (Wrapper.mc.world == null) {
                Managers.TEXT
                   .drawString(
-                     "Polaris " + ChatFormatting.WHITE + "alpha",
+                     "Polaris " + ChatFormatting.WHITE + "0.0.1",
                      1.0F,
                      (float)(screen.height - Managers.TEXT.getFontHeight2()),
                      Managers.COLORS.getNormalCurrent().getRGB(),
@@ -97,8 +97,8 @@ public abstract class MixinGuiScreen extends Gui {
             } else {
                Managers.TEXT
                   .drawString(
-                     "Polaris " + ChatFormatting.WHITE + "alpha",
-                     (float)screen.width - 1.0F - (float)Managers.TEXT.getStringWidth("Polaris alpha"),
+                     "Polaris " + ChatFormatting.WHITE + "0.0.1",
+                     (float)screen.width - 1.0F - (float)Managers.TEXT.getStringWidth("Polaris 0.0.1"),
                      (float)(screen.height - Managers.TEXT.getFontHeight2()),
                      Managers.COLORS.getNormalCurrent().getRGB(),
                      true

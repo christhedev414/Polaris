@@ -22,35 +22,35 @@ import org.lwjgl.opengl.Display;
 @Mod(
    modid = "polaris",
    name = "Polaris",
-   version = "alpha"
+   version = "0.0.1"
 )
 public class Polaris {
    public static final String MODID = "polaris";
    public static final String MODNAME = "Polaris";
-   public static final String MODVERISON = "alpha";
+   public static final String MODVERISON = "0.0.1";
    public static final Logger LOGGER = LogManager.getLogger("Polaris");
    @Instance
    public static Polaris INSTANCE;
 
    public static void load() {
-      LOGGER.info("Loading Polaris alpha...");
+      LOGGER.info("Loading Polaris 0.0.1...");
       Managers.load();
       if (Gui.INSTANCE == null) {
          Gui.INSTANCE = new Gui();
       }
 
-      LOGGER.info("Polaris alpha successfully loaded!\n");
+      LOGGER.info("Polaris 0.0.1 successfully loaded!\n");
    }
 
    public static void unload(boolean force) {
-      LOGGER.info("Unloading Polaris alpha...");
+      LOGGER.info("Unloading Polaris 0.0.1...");
       Managers.unload(force);
-      LOGGER.info("Polaris alpha successfully unloaded!\n");
+      LOGGER.info("Polaris 0.0.1 successfully unloaded!\n");
    }
 
    @EventHandler
    public void preInit(FMLPreInitializationEvent event) {
-      Display.setTitle("Polaris alpha: Loading...");
+      Display.setTitle("Polaris 0.0.1: Loading...");
       if (Util.getOSType() != EnumOS.OSX) {
          try (
             InputStream inputStream16x = Minecraft.class.getResourceAsStream("/assets/minecraft/textures/polaris/constant/icon16x.png");
@@ -59,7 +59,7 @@ public class Polaris {
             ByteBuffer[] icons = new ByteBuffer[]{RenderUtil.readImageToBuffer(inputStream16x), RenderUtil.readImageToBuffer(inputStream32x)};
             Display.setIcon(icons);
          } catch (Exception var34) {
-            LOGGER.error("Polaris alpha couldn't set the window icon!", var34);
+            LOGGER.error("Polaris 0.0.1 couldn't set the window icon!", var34);
          }
       }
    }

@@ -266,7 +266,7 @@ public class HUD extends Module {
          );
          if (this.idWatermark.getValue()) {
             String nameString = "Polaris ";
-            String domainString = "alpha";
+            String domainString = "0.0.1";
             float offset = (float)Managers.TEXT.scaledHeight / 2.0F - 30.0F;
             if (ClickGui.INSTANCE.rainbow.getValue()) {
                if (ClickGui.INSTANCE.hudRainbow.getValue() == ClickGui.HudRainbow.STATIC) {

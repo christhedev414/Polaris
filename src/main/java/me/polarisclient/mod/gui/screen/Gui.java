@@ -147,8 +147,8 @@ public class Gui extends GuiScreen {
       if (ClickGui.INSTANCE.waterMark.getValue()) {
          Managers.TEXT
             .drawString(
-               "Polaris " + ChatFormatting.WHITE + "alpha",
-               (float)this.width - 1.0F - (float)Managers.TEXT.getStringWidth("Polaris alpha"),
+               "Polaris " + ChatFormatting.WHITE + "0.0.1",
+               (float)this.width - 1.0F - (float)Managers.TEXT.getStringWidth("Polaris 0.0.1"),
                (float)(this.height - Managers.TEXT.getFontHeight2()),
                Managers.COLORS.getNormalCurrent().getRGB(),
                true
