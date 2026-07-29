@@ -33,13 +33,13 @@ compileJava {
 minecraft {
     mappings channel: 'stable', version: '39-1.12'
 
-    accessTransformer = file('src/main/resources/rebirth_at.cfg')
+    accessTransformer = file('src/main/resources/polaris_at.cfg')
 
     runs {
         client {
             workingDirectory project.file('run')
 
-            property 'fml.coreMods.load', 'me.rebirthclient.asm.MixinLoader'
+            property 'fml.coreMods.load', 'me.polarisclient.asm.MixinLoader'
             property 'mixin.env.disableRefMap', 'true'
 
             property 'forge.logging.markers', 'SCAN,REGISTRIES,REGISTRYDUMP'
@@ -80,7 +80,7 @@ dependencies {
 
 mixin {
     defaultObfuscationEnv 'searge'
-    add sourceSets.main, 'mixins.rebirth.refmap.json'
+    add sourceSets.main, 'mixins.polaris.refmap.json'
 
 }
 
@@ -107,13 +107,13 @@ processResources {
 jar {
     manifest {
         attributes(
-                'MixinConfigs': 'mixins.rebirth.json',
+                'MixinConfigs': 'mixins.polaris.json',
                 'tweakClass': 'org.spongepowered.asm.launch.MixinTweaker',
                 'TweakOrder': 0,
                 'FMLCorePluginContainsFMLMod': 'true',
-                'FMLCorePlugin': 'me.rebirthclient.asm.MixinLoader',
+                'FMLCorePlugin': 'me.polarisclient.asm.MixinLoader',
                 'ForceLoadAsMod': 'true',
-                'FMLAT': 'rebirth_at.cfg'
+                'FMLAT': 'polaris_at.cfg'
         )
     }
 
