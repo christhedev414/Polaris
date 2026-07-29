@@ -1,11 +1,13 @@
 package me.polarisclient.mod.modules.impl.misc;
 
 import java.awt.Color;
+import me.polarisclient.api.util.path.NavigationMode;
 import me.polarisclient.api.util.path.PathExecutor;
 import me.polarisclient.api.util.path.PathManager;
 import me.polarisclient.api.util.path.PathRenderer;
 import me.polarisclient.api.util.path.RotationController;
 import me.polarisclient.api.util.path.calc.CalculationResult;
+import me.polarisclient.api.util.path.elytra.ElytraSettings;
 import me.polarisclient.api.util.path.goal.Goal;
 import me.polarisclient.api.util.path.movement.MovementCosts;
 import me.polarisclient.mod.commands.Command;
@@ -25,6 +27,32 @@ import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
  */
 public class Pathfind extends Module {
    public static Pathfind INSTANCE;
+
+   // ---- travel mode ----
+   private final Setting<NavigationMode> navigation = this.add(new Setting<>("Travel", NavigationMode.GROUND));
+
+   // ---- elytra ----
+   private final Setting<Integer> elytraMinDistance = this.add(
+      new Setting<>("ElytraMinDist", 150, 20, 1000, v -> this.navigation.getValue() != NavigationMode.GROUND)
+   );
+   private final Setting<Integer> elytraCruise = this.add(
+      new Setting<>("ElytraCruise", 40, 5, 120, v -> this.navigation.getValue() != NavigationMode.GROUND)
+   );
+   private final Setting<Boolean> elytraFireworks = this.add(
+      new Setting<>("Fireworks", true, v -> this.navigation.getValue() != NavigationMode.GROUND)
+   );
+   private final Setting<Float> elytraClimbPitch = this.add(
+      new Setting<>("ClimbPitch", 30.0F, 5.0F, 60.0F, v -> this.navigation.getValue() != NavigationMode.GROUND)
+   );
+   private final Setting<Float> elytraDivePitch = this.add(
+      new Setting<>("DivePitch", 40.0F, 5.0F, 80.0F, v -> this.navigation.getValue() != NavigationMode.GROUND)
+   );
+   private final Setting<Integer> elytraLandDistance = this.add(
+      new Setting<>("LandDist", 48, 10, 200, v -> this.navigation.getValue() != NavigationMode.GROUND)
+   );
+   private final Setting<Integer> elytraLookAhead = this.add(
+      new Setting<>("LookAhead", 24, 8, 64, v -> this.navigation.getValue() != NavigationMode.GROUND)
+   );
 
    // ---- capability toggles ----
    private final Setting<Boolean> sprint = this.add(new Setting<>("Sprint", true));
@@ -177,6 +205,20 @@ public class Pathfind extends Module {
                .allowSwim(this.swim.getValue())
                .allowClimb(this.climb.getValue())
                .heuristicWeight(this.heuristicWeight.getValue())
+               .build()
+         );
+      this.manager.setNavigationMode(this.navigation.getValue());
+      this.manager.setElytraMinDistance(this.elytraMinDistance.getValue());
+      this.manager
+         .setElytraSettings(
+            ElytraSettings.builder()
+               .cruiseHeight(this.elytraCruise.getValue())
+               .useFireworks(this.elytraFireworks.getValue())
+               .maxClimbPitch(this.elytraClimbPitch.getValue())
+               .maxDivePitch(this.elytraDivePitch.getValue())
+               .landingDistance(this.elytraLandDistance.getValue())
+               .lookAhead(this.elytraLookAhead.getValue())
+               .rotationSpeed(this.rotationSpeed.getValue())
                .build()
          );
       this.manager.setMaxNodes(this.maxNodes.getValue());

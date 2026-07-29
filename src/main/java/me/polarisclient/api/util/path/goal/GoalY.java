@@ -25,6 +25,15 @@ public class GoalY implements Goal {
       return new BlockPos(0, this.y, 0);
    }
 
+   /**
+    * Not flyable: this goal names a height, not a place. Its render position has no meaningful X or
+    * Z, so an aerial navigator handed it would set course for the world origin.
+    */
+   @Override
+   public boolean isFlyable() {
+      return false;
+   }
+
    @Override
    public String toString() {
       return "y=" + this.y;

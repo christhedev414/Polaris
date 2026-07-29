@@ -8,6 +8,9 @@ import me.polarisclient.api.util.Timer;
 import me.polarisclient.api.util.Wrapper;
 import me.polarisclient.api.util.path.calc.CalculationResult;
 import me.polarisclient.api.util.path.calc.PathCalculator;
+import me.polarisclient.api.util.path.elytra.ElytraController;
+import me.polarisclient.api.util.path.elytra.ElytraSettings;
+import me.polarisclient.api.util.path.elytra.ElytraState;
 import me.polarisclient.api.util.path.goal.Goal;
 import me.polarisclient.api.util.path.goal.GoalEntity;
 import me.polarisclient.api.util.path.movement.MovementCosts;
@@ -44,6 +47,7 @@ public class PathManager implements Wrapper {
    private final BlockCache cache = new BlockCache();
    private final RotationController rotation = new RotationController();
    private final Timer entityRepathTimer = new Timer();
+   private final ElytraController elytra = new ElytraController(this.cache);
 
    private ExecutorService worker;
    private Future<CalculationResult> pending;
@@ -64,18 +68,30 @@ public class PathManager implements Wrapper {
    private boolean sprintAllowed = true;
    private boolean debug;
 
+   private NavigationMode navigationMode = NavigationMode.GROUND;
+   private ElytraSettings elytraSettings = ElytraSettings.defaults();
+   private int elytraMinDistance = 150;
+   private boolean flying;
+   /** Set when a launch fails, so the manager walks instead of retrying forever on this goal. */
+   private boolean elytraRejected;
+
    // ---- lifecycle ----
 
    public void setGoal(Goal goal) {
       this.goal = goal;
       this.discardPath();
       this.consecutiveFailures = 0;
+      this.flying = false;
+      this.elytraRejected = false;
+      this.elytra.setGoal(goal);
       this.setStatus(goal == null ? "Idle" : "Planning");
    }
 
    public void stop() {
       this.goal = null;
       this.discardPath();
+      this.flying = false;
+      this.elytra.setGoal(null);
       if (this.pending != null) {
          this.pending.cancel(true);
          this.pending = null;
@@ -112,8 +128,11 @@ public class PathManager implements Wrapper {
                if (this.goal.isFinished(feet.getX(), feet.getY(), feet.getZ())) {
                   this.setGoal(null);
                   this.setStatus("Arrived");
-               } else if (this.pending == null && this.needsCalculation()) {
-                  this.submit(feet);
+               } else if (!this.updateFlight()) {
+                  // Only plan a ground path when not flying - the two navigators are exclusive.
+                  if (this.pending == null && this.needsCalculation()) {
+                     this.submit(feet);
+                  }
                }
             }
          }
@@ -122,8 +141,72 @@ public class PathManager implements Wrapper {
 
    /** Called from the input event so movement is written at the point in the tick vanilla expects. */
    public void applyInput(MovementInput input) {
-      if (this.goal != null && this.executor != null && this.executor.getState() == PathExecutor.State.RUNNING) {
-         this.executor.tick(input, this.sprintAllowed);
+      if (this.goal != null) {
+         if (this.flying) {
+            this.elytra.tick(input);
+         } else if (this.executor != null && this.executor.getState() == PathExecutor.State.RUNNING) {
+            this.executor.tick(input, this.sprintAllowed);
+         }
+      }
+   }
+
+   /**
+    * Chooses between the ground and aerial navigators, and runs the aerial one's bookkeeping.
+    * Returns true while flying, which suppresses ground planning for the tick.
+    *
+    * The two navigators are mutually exclusive by construction. Flight is closed-loop control with
+    * no plan behind it, so keeping a ground path alive underneath would mean maintaining a route
+    * that is wrong the moment the player leaves the ground.
+    */
+   private boolean updateFlight() {
+      if (!this.flying && this.shouldLaunch()) {
+         this.flying = true;
+         this.elytra.setSettings(this.elytraSettings);
+         this.elytra.setGoal(this.goal);
+         this.discardPath();
+      }
+
+      if (!this.flying) {
+         return false;
+      } else {
+         this.elytra.setSettings(this.elytraSettings);
+         ElytraState state = this.elytra.getState();
+         if (state == ElytraState.FAILED) {
+            // Could not take off, or the elytra broke mid-flight. Walk the rest.
+            this.flying = false;
+            this.elytraRejected = true;
+            this.setStatus("Elytra: " + this.elytra.getStatus() + ", walking");
+            return false;
+         } else if (state == ElytraState.LANDED) {
+            // Down near the target: hand the last stretch to the ground pathfinder, which can
+            // finish on an exact block in a way a glider cannot.
+            this.flying = false;
+            this.setStatus("Landed, walking in");
+            return false;
+         } else {
+            this.setStatus(this.elytra.getStatus());
+            return true;
+         }
+      }
+   }
+
+   /** Whether an elytra launch is worth attempting right now. */
+   private boolean shouldLaunch() {
+      if (this.navigationMode == NavigationMode.GROUND || this.elytraRejected) {
+         return false;
+      } else if (this.goal != null && this.goal.isFlyable()) {
+         if (!ElytraController.hasUsableElytra()) {
+            return false;
+         } else {
+            // Below the threshold, launching costs more time than it saves - and in AUTO the whole
+            // point is to walk the short legs.
+            BlockPos target = this.goal.getRenderPos();
+            double dx = (double)target.getX() - mc.player.posX;
+            double dz = (double)target.getZ() - mc.player.posZ;
+            return Math.sqrt(dx * dx + dz * dz) >= (double)this.elytraMinDistance;
+         }
+      } else {
+         return false;
       }
    }
 
@@ -321,5 +404,25 @@ public class PathManager implements Wrapper {
 
    public void setDebug(boolean debug) {
       this.debug = debug;
+   }
+
+   public void setNavigationMode(NavigationMode navigationMode) {
+      this.navigationMode = navigationMode;
+   }
+
+   public void setElytraSettings(ElytraSettings elytraSettings) {
+      this.elytraSettings = elytraSettings;
+   }
+
+   public void setElytraMinDistance(int elytraMinDistance) {
+      this.elytraMinDistance = elytraMinDistance;
+   }
+
+   public boolean isFlying() {
+      return this.flying;
+   }
+
+   public ElytraController getElytra() {
+      return this.elytra;
    }
 }

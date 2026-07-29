@@ -31,6 +31,22 @@ public interface Goal {
    BlockPos getRenderPos();
 
    /**
+    * Whether an aerial navigator can use this goal, i.e. whether {@link #getRenderPos()} names a
+    * real place to fly toward. Goals that constrain only altitude do not.
+    */
+   default boolean isFlyable() {
+      return true;
+   }
+
+   /**
+    * Whether the goal pins a specific height. When false, an aerial navigator picks its own
+    * approach altitude from the terrain instead of diving at the goal's nominal Y.
+    */
+   default boolean constrainsAltitude() {
+      return true;
+   }
+
+   /**
     * Diagonal (octile) distance across the XZ plane: the length of the shortest unobstructed walk
     * when a diagonal step covers sqrt(2) blocks and a straight step covers 1.
     */

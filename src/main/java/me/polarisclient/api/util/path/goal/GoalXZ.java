@@ -30,6 +30,12 @@ public class GoalXZ implements Goal {
       return new BlockPos(this.x, 0, this.z);
    }
 
+   /** Any height will do, so an elytra approach should follow the terrain rather than dive to y=0. */
+   @Override
+   public boolean constrainsAltitude() {
+      return false;
+   }
+
    @Override
    public String toString() {
       return this.x + " " + this.z;
