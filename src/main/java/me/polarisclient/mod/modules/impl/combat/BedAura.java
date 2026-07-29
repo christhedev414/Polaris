@@ -1,5 +1,6 @@
 package me.polarisclient.mod.modules.impl.combat;
 
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import java.awt.Color;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -484,17 +485,28 @@ public class BedAura extends Module {
 
       List<BedAura.DamageInfo> priced = new ArrayList<>();
       List<BedAura.DamageInfo> noBase = new ArrayList<>();
+      // Damage depends only on the foot position, and the shortlist carries several facings per
+      // position, so without this every position would be priced up to four times over - and each
+      // pricing is around ninety raytraces once both parties are counted.
+      Long2ObjectOpenHashMap<float[]> damageCache = new Long2ObjectOpenHashMap<>();
 
       for(BedAura.CalcInfo candidate : shortlist) {
          // The world may have moved on since the snapshot was taken a tick ago, so re-check the
          // two blocks that actually matter against the live world before committing to them.
          BlockPos head = candidate.pos.offset(candidate.side);
          if (this.isReplaceable(candidate.pos) && this.isReplaceable(head)) {
-            Vec3d explosion = new Vec3d(
-               (double)candidate.pos.getX() + 0.5, (double)candidate.pos.getY() + 0.5, (double)candidate.pos.getZ() + 0.5
-            );
-            float targetDamage = calculateBedDamage(explosion, target, targetPos);
-            float selfDamage = calculateBedDamage(explosion, mc.player, selfPos);
+            long key = candidate.pos.toLong();
+            float[] damage = damageCache.get(key);
+            if (damage == null) {
+               Vec3d explosion = new Vec3d(
+                  (double)candidate.pos.getX() + 0.5, (double)candidate.pos.getY() + 0.5, (double)candidate.pos.getZ() + 0.5
+               );
+               damage = new float[]{calculateBedDamage(explosion, target, targetPos), calculateBedDamage(explosion, mc.player, selfPos)};
+               damageCache.put(key, damage);
+            }
+
+            float targetDamage = damage[0];
+            float selfDamage = damage[1];
             float minimum = candidate.basePlaceFoot == null && candidate.basePlaceHead == null
                ? this.minDamage.getValue()
                : this.basePlaceMinDamage.getValue();
@@ -616,6 +628,9 @@ public class BedAura extends Module {
          this.needOffhandBed = false;
       } else {
          if (this.isMainHand()) {
+            // Clear the off-hand request, otherwise switching hand mode mid-fight leaves an
+            // offhand-management module holding a bed it no longer needs to hold.
+            this.needOffhandBed = false;
             int slot = this.bedSlot.getValue() - 1;
             if (!this.isBed(mc.player.inventory.getStackInSlot(slot))) {
                this.refillBed(slot);
@@ -1007,8 +1022,12 @@ public class BedAura extends Module {
     * to decide which candidates are worth pricing properly on the main thread.
     */
    private static final class SearchRequest implements java.util.concurrent.Callable<List<BedAura.CalcInfo>> {
-      /** How many candidates to hand back for exact pricing. */
-      private static final int SHORTLIST = 16;
+      /**
+       * How many distinct foot positions to hand back for exact pricing. Every valid facing of a
+       * kept position comes with it, so the returned list is longer than this - but pricing is
+       * memoised per position, so this is what actually bounds the expensive work.
+       */
+      private static final int SHORTLIST_POSITIONS = 12;
 
       private final TerrainSnapshot snapshot;
       private final BlockPos centre;
@@ -1080,7 +1099,27 @@ public class BedAura extends Module {
          }
 
          candidates.sort(Comparator.comparingDouble(candidate -> -candidate.bound));
-         return candidates.size() <= SHORTLIST ? candidates : new ArrayList<>(candidates.subList(0, SHORTLIST));
+
+         // Budget the shortlist by distinct POSITION, not by entry.
+         //
+         // The bed explodes at the foot block, so damage is a function of the position alone - the
+         // facing only decides where the head lands and whether it needs a support block. All four
+         // facings of a position therefore carry an identical bound, and a naive top-N of entries
+         // would fill the whole shortlist with four facings of the same two or three positions,
+         // throwing away almost all the positional diversity the search just did the work to find.
+         List<BedAura.CalcInfo> shortlist = new ArrayList<>();
+         java.util.Set<BlockPos> kept = new java.util.HashSet<>();
+
+         for(BedAura.CalcInfo candidate : candidates) {
+            if (kept.contains(candidate.pos)) {
+               shortlist.add(candidate);
+            } else if (kept.size() < SHORTLIST_POSITIONS) {
+               kept.add(candidate.pos);
+               shortlist.add(candidate);
+            }
+         }
+
+         return shortlist;
       }
 
       /** Validates one foot position and facing against the snapshot. */
