@@ -1,7 +1,7 @@
 [
   {
-    "modid": "rebirth",
-    "name": "rebirth",
+    "modid": "polaris",
+    "name": "polaris",
     "description": "Default prefix is ; . Do ;help for commands :^)",
 
     "version": "alpha",
