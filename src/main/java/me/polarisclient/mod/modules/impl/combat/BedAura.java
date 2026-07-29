@@ -13,6 +13,7 @@ import me.polarisclient.api.util.DamageUtil;
 import me.polarisclient.api.util.InventoryUtil;
 import me.polarisclient.api.util.Timer;
 import me.polarisclient.api.util.combat.MotionPredictor;
+import me.polarisclient.api.util.combat.TerrainSnapshot;
 import me.polarisclient.api.util.render.RenderUtil;
 import me.polarisclient.mod.modules.Category;
 import me.polarisclient.mod.modules.Module;
@@ -250,6 +251,8 @@ public class BedAura extends Module {
    private final Timer basePlaceTimer = new Timer();
    private final int[] explosionCounts = new int[EXPLOSION_SAMPLES];
    private int explosionIndex;
+   private java.util.concurrent.ExecutorService executor;
+   private java.util.concurrent.Future<List<BedAura.CalcInfo>> pendingSearch;
    private BedAura.PlaceInfo placeInfo;
    private EntityPlayer target;
    private EnumFacing lockedDirection;
@@ -298,6 +301,7 @@ public class BedAura extends Module {
    }
 
    private void resetState() {
+      this.shutdownSearch();
       this.placeInfo = null;
       this.target = null;
       this.lockedDirection = null;
@@ -366,34 +370,110 @@ public class BedAura extends Module {
    // ---- placement search ----
 
    /**
-    * Finds the best bed placement, if any.
+    * Drives the search pipeline, which is split across two threads at the one seam where that is
+    * both safe and worthwhile.
     *
-    * NOTE ON THREADING: this runs on the tick thread, not a background one. The search reads block
-    * states and calls into vanilla explosion maths, all of which touch the World - and World is not
-    * safe to read off-thread, because the network thread mutates chunks as block updates arrive.
-    * Moving it off-thread the way a coroutine-based client does is a real crash risk, not a
-    * theoretical one. It is also unnecessary here: the search sphere is only ~660 positions, the
-    * cheap validity filter rejects the great majority before any damage maths happens, and the whole
-    * pass is gated behind Update Delay. See the class comment on the alternative if this ever needs
-    * to move.
+    * The problem: the whole search touches the World, and World cannot be read off the main thread -
+    * the network thread mutates chunks as block updates arrive, so a concurrent getBlockState can
+    * observe a half-applied change or trip a chunk load. But the search is also the most expensive
+    * thing this module does, and the expensive half is the vanilla explosion maths: a density
+    * calculation casts around 45 rays, and doing that for both parties across every surviving
+    * candidate is thousands of raytraces every update.
+    *
+    * The split:
+    *   1. MAIN - capture a {@link TerrainSnapshot} of the search cube. One pass, no raytracing.
+    *   2. WORKER - enumerate every position and facing against the snapshot, discard the ones a bed
+    *      cannot legally occupy, and rank what is left by an upper bound on damage. This is the
+    *      part that scales with the search volume, and it touches nothing but the snapshot.
+    *   3. MAIN - compute exact vanilla damage for the handful of survivors and pick a winner.
+    *
+    * Step 3 stays on the main thread deliberately. The damage figures are what Min Damage and Max
+    * Self Damage are compared against, so they have to be the real vanilla numbers rather than an
+    * approximation computed against a simplified occlusion model - a damage predictor that is
+    * quietly wrong is worse than one that is slow.
     */
    private void update() {
-      if (mc.player.dimension != 0 && this.hasBedSomewhere()) {
-         if (this.updateTimer.passedMs((long)this.updateDelay.getValue().intValue())) {
+      if (mc.player.dimension == 0 || !this.hasBedSomewhere()) {
+         this.placeInfo = null;
+         this.cancelSearch();
+      } else {
+         this.collectSearchResult();
+         if (this.pendingSearch == null && this.updateTimer.passedMs((long)this.updateDelay.getValue().intValue())) {
             this.updateTimer.reset();
             this.target = me.polarisclient.api.util.CombatUtil.getTarget((double)this.range.getValue().floatValue() + 8.0);
             if (this.target == null) {
                this.placeInfo = null;
             } else {
-               this.placeInfo = this.calcPlaceInfo(this.target);
+               this.submitSearch(this.target);
             }
          }
-      } else {
-         this.placeInfo = null;
       }
    }
 
-   private BedAura.PlaceInfo calcPlaceInfo(EntityPlayer target) {
+   /** Captures the snapshot and hands the enumeration to the worker. Main thread. */
+   private void submitSearch(EntityPlayer target) {
+      Vec3d eyes = mc.player.getPositionEyes(1.0F);
+      Vec3d targetPos = this.extrapolate.getValue()
+         ? this.predictor.predict(target, this.predictor.getLookahead(target, this.baseLookahead.getValue()))
+         : target.getPositionVector();
+      boolean allowBase = this.basePlace.getValue()
+         && this.basePlaceTimer.passedMs((long)this.basePlaceDelay.getValue().intValue())
+         && this.hasObsidian()
+         && this.predictor.getSpeed(target) <= (double)this.basePlaceMaxSpeed.getValue().floatValue();
+
+      float searchRange = this.range.getValue();
+      // A little margin past the search radius, so base-place support blocks one below the sphere
+      // and the head block one step outward are still inside the snapshot.
+      int radius = MathHelper.ceil(searchRange) + 2;
+      BlockPos centre = new BlockPos(eyes.x, eyes.y, eyes.z);
+      TerrainSnapshot snapshot = TerrainSnapshot.capture(mc.world, centre, radius);
+
+      BedAura.SearchRequest request = new BedAura.SearchRequest(
+         snapshot,
+         centre,
+         eyes,
+         targetPos,
+         searchRange,
+         this.basePlaceRange.getValue(),
+         mc.player.posY,
+         this.basePlaceMaxY.getValue(),
+         this.minDamage.getValue(),
+         // Difficulty scaling is read here, on the main thread, so the worker's bound stays a real
+         // upper bound on hard difficulty rather than understating by a third.
+         DamageUtil.getDamageMultiplied(1.0F),
+         allowBase
+      );
+      this.pendingSearch = this.searchExecutor().submit(request);
+   }
+
+   /** Picks up a finished search and turns its shortlist into a committed placement. Main thread. */
+   private void collectSearchResult() {
+      if (this.pendingSearch != null && this.pendingSearch.isDone()) {
+         List<BedAura.CalcInfo> shortlist = null;
+
+         try {
+            shortlist = this.pendingSearch.get();
+         } catch (Exception var4) {
+            // Interrupted or the worker threw; treat it as a search that found nothing.
+         }
+
+         this.pendingSearch = null;
+         if (shortlist != null && !shortlist.isEmpty() && this.target != null) {
+            this.placeInfo = this.scoreShortlist(shortlist, this.target);
+         } else {
+            this.placeInfo = null;
+         }
+      }
+   }
+
+   /**
+    * Prices the shortlist with real vanilla explosion maths and picks a winner.
+    *
+    * Only ever sees the handful of candidates the worker ranked highest, so the expensive part -
+    * roughly 45 rays per damage figure, two figures per candidate - stays bounded regardless of how
+    * big the search volume was.
+    */
+   private BedAura.PlaceInfo scoreShortlist(List<BedAura.CalcInfo> shortlist, EntityPlayer target) {
       Vec3d eyes = mc.player.getPositionEyes(1.0F);
       Vec3d targetPos = this.extrapolate.getValue()
          ? this.predictor.predict(target, this.predictor.getLookahead(target, this.baseLookahead.getValue()))
@@ -402,48 +482,45 @@ public class BedAura extends Module {
          ? this.predictor.predict(mc.player, this.predictor.getLookahead(mc.player, this.baseLookahead.getValue()))
          : mc.player.getPositionVector();
 
-      boolean allowBase = this.basePlace.getValue()
-         && this.basePlaceTimer.passedMs((long)this.basePlaceDelay.getValue().intValue())
-         && this.hasObsidian()
-         && this.predictor.getSpeed(target) <= (double)this.basePlaceMaxSpeed.getValue().floatValue();
-
-      List<BedAura.DamageInfo> candidates = new ArrayList<>();
+      List<BedAura.DamageInfo> priced = new ArrayList<>();
       List<BedAura.DamageInfo> noBase = new ArrayList<>();
-      float searchRange = this.range.getValue();
-      int radius = MathHelper.ceil(searchRange);
-      BlockPos origin = new BlockPos(eyes.x, eyes.y, eyes.z);
-      BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
 
-      for(int dx = -radius; dx <= radius; ++dx) {
-         for(int dy = -radius; dy <= radius; ++dy) {
-            for(int dz = -radius; dz <= radius; ++dz) {
-               cursor.setPos(origin.getX() + dx, origin.getY() + dy, origin.getZ() + dz);
-               if (!(eyes.squareDistanceTo((double)cursor.getX() + 0.5, (double)cursor.getY() + 0.5, (double)cursor.getZ() + 0.5)
-                  > (double)(searchRange * searchRange))) {
-                  BlockPos foot = cursor.toImmutable();
-
-                  for(EnumFacing direction : EnumFacing.HORIZONTALS) {
-                     BedAura.DamageInfo info = this.evaluate(foot, direction, eyes, target, targetPos, selfPos, allowBase);
-                     if (info != null) {
-                        candidates.add(info);
-                        if (!info.needsBase()) {
-                           noBase.add(info);
-                        }
-                     }
-                  }
+      for(BedAura.CalcInfo candidate : shortlist) {
+         // The world may have moved on since the snapshot was taken a tick ago, so re-check the
+         // two blocks that actually matter against the live world before committing to them.
+         BlockPos head = candidate.pos.offset(candidate.side);
+         if (this.isReplaceable(candidate.pos) && this.isReplaceable(head)) {
+            Vec3d explosion = new Vec3d(
+               (double)candidate.pos.getX() + 0.5, (double)candidate.pos.getY() + 0.5, (double)candidate.pos.getZ() + 0.5
+            );
+            float targetDamage = calculateBedDamage(explosion, target, targetPos);
+            float selfDamage = calculateBedDamage(explosion, mc.player, selfPos);
+            float minimum = candidate.basePlaceFoot == null && candidate.basePlaceHead == null
+               ? this.minDamage.getValue()
+               : this.basePlaceMinDamage.getValue();
+            if (!(selfDamage > this.maxSelfDamage.getValue())
+               && !(mc.player.getHealth() + mc.player.getAbsorptionAmount() - selfDamage < this.noSuicide.getValue())
+               && !(targetDamage < minimum)
+               && !(targetDamage - selfDamage < this.damageBalance.getValue())) {
+               BedAura.DamageInfo info = new BedAura.DamageInfo(
+                  candidate, targetDamage, selfDamage, candidate.basePlaceFoot, candidate.basePlaceHead
+               );
+               priced.add(info);
+               if (!info.needsBase()) {
+                  noBase.add(info);
                }
             }
          }
       }
 
-      if (candidates.isEmpty()) {
+      if (priced.isEmpty()) {
          return null;
       } else {
-         // A placement that needs no support block is strictly better when it already hits hard
-         // enough: it costs one fewer packet and cannot be griefed by the support being mined.
+         // A placement needing no support block is strictly better once it already hits hard enough:
+         // one fewer packet, and nothing for the target to mine out from under it.
          BedAura.DamageInfo best = this.selectWithDirectionLock(noBase, eyes);
          if (best == null || best.targetDamage < this.basePlaceToggleDamage.getValue()) {
-            BedAura.DamageInfo withBase = this.selectWithDirectionLock(candidates, eyes);
+            BedAura.DamageInfo withBase = this.selectWithDirectionLock(priced, eyes);
             if (withBase != null && (best == null || withBase.targetDamage > best.targetDamage)) {
                best = withBase;
             }
@@ -462,69 +539,39 @@ public class BedAura extends Module {
                best.calcInfo.hitVec,
                best.targetDamage,
                best.needsBase(),
-               best.basePlaceFoot,
-               best.basePlaceHead
+               best.calcInfo.basePlaceFoot,
+               best.calcInfo.basePlaceHead
             );
          }
       }
    }
 
-   /** Validates one foot position and facing, and prices it. Returns null when unusable. */
-   private BedAura.DamageInfo evaluate(
-      BlockPos foot, EnumFacing direction, Vec3d eyes, EntityPlayer target, Vec3d targetPos, Vec3d selfPos, boolean allowBase
-   ) {
-      BlockPos head = foot.offset(direction);
-      if (!this.isReplaceable(foot) || !this.isReplaceable(head)) {
-         return null;
-      } else {
-         boolean footSupported = this.isSolid(foot.down());
-         boolean headSupported = this.isSolid(head.down());
-         BlockPos basePlaceFoot = null;
-         BlockPos basePlaceHead = null;
-         if (!footSupported || !headSupported) {
-            if (!allowBase) {
-               return null;
-            }
+   private java.util.concurrent.ExecutorService searchExecutor() {
+      if (this.executor == null) {
+         this.executor = java.util.concurrent.Executors.newSingleThreadExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "Polaris-BedAura");
+            // Daemon so an in-flight search can never hold the game open.
+            thread.setDaemon(true);
+            thread.setPriority(Thread.MIN_PRIORITY);
+            return thread;
+         });
+      }
 
-            // Support blocks must themselves be placeable and within the shorter base-place reach.
-            if (!footSupported) {
-               if (!this.isReplaceable(foot.down()) || !this.inRange(eyes, foot.down(), this.basePlaceRange.getValue())) {
-                  return null;
-               }
+      return this.executor;
+   }
 
-               basePlaceFoot = foot.down();
-            }
+   private void cancelSearch() {
+      if (this.pendingSearch != null) {
+         this.pendingSearch.cancel(true);
+         this.pendingSearch = null;
+      }
+   }
 
-            if (!headSupported) {
-               if (!this.isReplaceable(head.down()) || !this.inRange(eyes, head.down(), this.basePlaceRange.getValue())) {
-                  return null;
-               }
-
-               basePlaceHead = head.down();
-            }
-
-            if (Math.abs((double)foot.getY() - mc.player.posY) > (double)this.basePlaceMaxY.getValue().floatValue()) {
-               return null;
-            }
-         }
-
-         Vec3d explosion = new Vec3d((double)foot.getX() + 0.5, (double)foot.getY() + 0.5, (double)foot.getZ() + 0.5);
-         float targetDamage = calculateBedDamage(explosion, target, targetPos);
-         float selfDamage = calculateBedDamage(explosion, mc.player, selfPos);
-         float minimum = basePlaceFoot == null && basePlaceHead == null ? this.minDamage.getValue() : this.basePlaceMinDamage.getValue();
-         if (selfDamage > this.maxSelfDamage.getValue()) {
-            return null;
-         } else if (mc.player.getHealth() + mc.player.getAbsorptionAmount() - selfDamage < this.noSuicide.getValue()) {
-            return null;
-         } else if (targetDamage < minimum) {
-            return null;
-         } else {
-            return targetDamage - selfDamage < this.damageBalance.getValue()
-               ? null
-               : new BedAura.DamageInfo(
-                  new BedAura.CalcInfo(direction, foot, this.calcHitVec(eyes, foot)), targetDamage, selfDamage, basePlaceFoot, basePlaceHead
-               );
-         }
+   private void shutdownSearch() {
+      this.cancelSearch();
+      if (this.executor != null) {
+         this.executor.shutdownNow();
+         this.executor = null;
       }
    }
 
@@ -540,7 +587,11 @@ public class BedAura extends Module {
          return null;
       } else {
          Comparator<BedAura.DamageInfo> order = Comparator.<BedAura.DamageInfo>comparingDouble(info -> -info.targetDamage)
-            .thenComparingDouble(info -> eyes.squareDistanceTo((double)info.calcInfo.pos.getX() + 0.5, (double)info.calcInfo.pos.getY() + 0.5, (double)info.calcInfo.pos.getZ() + 0.5));
+            .thenComparingDouble(
+               info -> eyes.squareDistanceTo(
+                  (double)info.calcInfo.pos.getX() + 0.5, (double)info.calcInfo.pos.getY() + 0.5, (double)info.calcInfo.pos.getZ() + 0.5
+               )
+            );
          candidates.sort(order);
          BedAura.DamageInfo best = candidates.get(0);
          if (this.lockedDirection == null) {
@@ -556,6 +607,7 @@ public class BedAura extends Module {
          }
       }
    }
+
 
    // ---- execution ----
 
@@ -846,12 +898,6 @@ public class BedAura extends Module {
          : raw;
    }
 
-   /** Derives the face to click, honouring strict direction by requiring a visible side. */
-   private Vec3d calcHitVec(Vec3d eyes, BlockPos foot) {
-      BlockPos base = foot.down();
-      return new Vec3d((double)base.getX() + 0.5, (double)base.getY() + 1.0, (double)base.getZ() + 0.5);
-   }
-
    private EnumFacing miningSide(BlockPos pos) {
       for(EnumFacing facing : EnumFacing.values()) {
          if (mc.world.getBlockState(pos.offset(facing)).getBlock() == Blocks.AIR) {
@@ -870,10 +916,6 @@ public class BedAura extends Module {
       }
 
       return this.strictDirection.getValue() ? null : EnumFacing.UP;
-   }
-
-   private boolean inRange(Vec3d eyes, BlockPos pos, float limit) {
-      return eyes.squareDistanceTo((double)pos.getX() + 0.5, (double)pos.getY() + 0.5, (double)pos.getZ() + 0.5) <= (double)(limit * limit);
    }
 
    private boolean isReplaceable(BlockPos pos) {
@@ -937,16 +979,169 @@ public class BedAura extends Module {
 
    // ---- supporting types ----
 
-   /** A candidate placement's geometry. */
+   /** A candidate placement's geometry, plus the upper bound the worker ranked it by. */
    public static final class CalcInfo {
       public final EnumFacing side;
       public final BlockPos pos;
       public final Vec3d hitVec;
+      public final BlockPos basePlaceFoot;
+      public final BlockPos basePlaceHead;
+      /** Optimistic damage estimate, used only for ranking. Never reported to the user. */
+      public final float bound;
 
-      public CalcInfo(EnumFacing side, BlockPos pos, Vec3d hitVec) {
+      public CalcInfo(EnumFacing side, BlockPos pos, Vec3d hitVec, BlockPos basePlaceFoot, BlockPos basePlaceHead, float bound) {
          this.side = side;
          this.pos = pos;
          this.hitVec = hitVec;
+         this.basePlaceFoot = basePlaceFoot;
+         this.basePlaceHead = basePlaceHead;
+         this.bound = bound;
+      }
+   }
+
+   /**
+    * The off-thread half of the search: enumerate, validate, rank.
+    *
+    * Reads nothing but its own immutable fields and the {@link TerrainSnapshot}, which is what makes
+    * it safe to run on a worker. It never computes a real damage figure - only an upper bound used
+    * to decide which candidates are worth pricing properly on the main thread.
+    */
+   private static final class SearchRequest implements java.util.concurrent.Callable<List<BedAura.CalcInfo>> {
+      /** How many candidates to hand back for exact pricing. */
+      private static final int SHORTLIST = 16;
+
+      private final TerrainSnapshot snapshot;
+      private final BlockPos centre;
+      private final Vec3d eyes;
+      private final Vec3d targetPos;
+      private final float range;
+      private final float basePlaceRange;
+      private final double playerY;
+      private final float basePlaceMaxY;
+      private final float minDamage;
+      private final float damageMultiplier;
+      private final boolean allowBase;
+
+      SearchRequest(
+         TerrainSnapshot snapshot,
+         BlockPos centre,
+         Vec3d eyes,
+         Vec3d targetPos,
+         float range,
+         float basePlaceRange,
+         double playerY,
+         float basePlaceMaxY,
+         float minDamage,
+         float damageMultiplier,
+         boolean allowBase
+      ) {
+         this.snapshot = snapshot;
+         this.centre = centre;
+         this.eyes = eyes;
+         this.targetPos = targetPos;
+         this.range = range;
+         this.basePlaceRange = basePlaceRange;
+         this.playerY = playerY;
+         this.basePlaceMaxY = basePlaceMaxY;
+         this.minDamage = minDamage;
+         this.damageMultiplier = damageMultiplier;
+         this.allowBase = allowBase;
+      }
+
+      @Override
+      public List<BedAura.CalcInfo> call() {
+         List<BedAura.CalcInfo> candidates = new ArrayList<>();
+         int radius = MathHelper.ceil(this.range);
+         float rangeSq = this.range * this.range;
+
+         for(int dx = -radius; dx <= radius; ++dx) {
+            for(int dy = -radius; dy <= radius; ++dy) {
+               for(int dz = -radius; dz <= radius; ++dz) {
+                  int x = this.centre.getX() + dx;
+                  int y = this.centre.getY() + dy;
+                  int z = this.centre.getZ() + dz;
+                  if (!(this.eyes.squareDistanceTo((double)x + 0.5, (double)y + 0.5, (double)z + 0.5) > (double)rangeSq)
+                     && this.snapshot.isReplaceable(x, y, z)) {
+                     float bound = this.upperBound(x, y, z);
+                     // Nothing here can ever beat the damage floor, so skip the facings entirely.
+                     if (!(bound < this.minDamage)) {
+                        BlockPos foot = new BlockPos(x, y, z);
+
+                        for(EnumFacing side : EnumFacing.HORIZONTALS) {
+                           BedAura.CalcInfo candidate = this.build(foot, side, bound);
+                           if (candidate != null) {
+                              candidates.add(candidate);
+                           }
+                        }
+                     }
+                  }
+               }
+            }
+         }
+
+         candidates.sort(Comparator.comparingDouble(candidate -> -candidate.bound));
+         return candidates.size() <= SHORTLIST ? candidates : new ArrayList<>(candidates.subList(0, SHORTLIST));
+      }
+
+      /** Validates one foot position and facing against the snapshot. */
+      private BedAura.CalcInfo build(BlockPos foot, EnumFacing side, float bound) {
+         BlockPos head = foot.offset(side);
+         if (!this.snapshot.isReplaceable(head)) {
+            return null;
+         } else {
+            boolean footSupported = this.snapshot.isSolid(foot.down());
+            boolean headSupported = this.snapshot.isSolid(head.down());
+            BlockPos basePlaceFoot = null;
+            BlockPos basePlaceHead = null;
+            if (!footSupported || !headSupported) {
+               if (!this.allowBase || Math.abs((double)foot.getY() - this.playerY) > (double)this.basePlaceMaxY) {
+                  return null;
+               }
+
+               if (!footSupported) {
+                  if (!this.snapshot.isReplaceable(foot.down()) || !this.inBaseRange(foot.down())) {
+                     return null;
+                  }
+
+                  basePlaceFoot = foot.down();
+               }
+
+               if (!headSupported) {
+                  if (!this.snapshot.isReplaceable(head.down()) || !this.inBaseRange(head.down())) {
+                     return null;
+                  }
+
+                  basePlaceHead = head.down();
+               }
+            }
+
+            Vec3d hitVec = new Vec3d((double)foot.getX() + 0.5, (double)foot.getY(), (double)foot.getZ() + 0.5);
+            return new BedAura.CalcInfo(side, foot, hitVec, basePlaceFoot, basePlaceHead, bound);
+         }
+      }
+
+      private boolean inBaseRange(BlockPos pos) {
+         return this.eyes.squareDistanceTo((double)pos.getX() + 0.5, (double)pos.getY() + 0.5, (double)pos.getZ() + 0.5)
+            <= (double)(this.basePlaceRange * this.basePlaceRange);
+      }
+
+      /**
+       * Highest damage this position could possibly deal.
+       *
+       * Assumes perfect line of sight - a block density of 1.0 - and skips armour entirely. Both
+       * simplifications can only ever overstate the figure, which is exactly what a ranking bound
+       * has to do: the real damage computed later is always lower, so nothing that deserved to be
+       * on the shortlist gets dropped from it.
+       */
+      private float upperBound(int x, int y, int z) {
+         double distance = this.targetPos.distanceTo(new Vec3d((double)x + 0.5, (double)y + 0.5, (double)z + 0.5)) / (double)BED_EXPLOSION_SIZE;
+         if (distance >= 1.0) {
+            return 0.0F;
+         } else {
+            double v = 1.0 - distance;
+            float raw = (float)((int)((v * v + v) / 2.0 * 7.0 * (double)BED_EXPLOSION_SIZE + 1.0));
+            return raw * this.damageMultiplier;
+         }
       }
    }
 
