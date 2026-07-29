@@ -128,6 +128,7 @@ import me.polarisclient.mod.modules.impl.movement.NewStep;
 import me.polarisclient.mod.modules.impl.movement.NoJumpDelay;
 import me.polarisclient.mod.modules.impl.movement.NoSlowDown;
 import me.polarisclient.mod.modules.impl.movement.OldSpeed;
+import me.polarisclient.mod.modules.impl.movement.Pathfind;
 import me.polarisclient.mod.modules.impl.movement.SafeWalk;
 import me.polarisclient.mod.modules.impl.movement.Scaffold;
 import me.polarisclient.mod.modules.impl.movement.Speed;
@@ -473,6 +474,7 @@ public class ModuleManager extends Mod {
       this.modules.add(new FastSwim());
       this.modules.add(new AntiWeb());
       this.modules.add(new NoJumpDelay());
+      this.modules.add(new Pathfind());
       this.modules.add(new Speed());
       this.modules.add(new AutoCenter());
       this.modules.add(new Step());

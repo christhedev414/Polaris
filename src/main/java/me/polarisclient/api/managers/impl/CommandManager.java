@@ -10,6 +10,7 @@ import me.polarisclient.mod.commands.impl.ClipCommand;
 import me.polarisclient.mod.commands.impl.ConfigCommand;
 import me.polarisclient.mod.commands.impl.CoordsCommand;
 import me.polarisclient.mod.commands.impl.FriendCommand;
+import me.polarisclient.mod.commands.impl.GotoCommand;
 import me.polarisclient.mod.commands.impl.HelpCommand;
 import me.polarisclient.mod.commands.impl.ModuleCommand;
 import me.polarisclient.mod.commands.impl.PeekCommand;
@@ -33,6 +34,7 @@ public class CommandManager extends Mod {
       this.commands.add(new PrefixCommand());
       this.commands.add(new ConfigCommand());
       this.commands.add(new FriendCommand());
+      this.commands.add(new GotoCommand());
       this.commands.add(new HelpCommand());
       this.commands.add(new UnloadCommand());
       this.commands.add(new ReloadSoundCommand());
