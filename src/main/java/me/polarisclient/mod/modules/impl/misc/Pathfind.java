@@ -1,4 +1,4 @@
-package me.polarisclient.mod.modules.impl.movement;
+package me.polarisclient.mod.modules.impl.misc;
 
 import java.awt.Color;
 import me.polarisclient.api.util.path.PathExecutor;
@@ -68,7 +68,7 @@ public class Pathfind extends Module {
    private final PathManager manager = new PathManager();
 
    public Pathfind() {
-      super("Pathfind", "Walks to a goal using A* pathfinding", Category.MOVEMENT);
+      super("Pathfind", "Walks to a goal using A* pathfinding", Category.MISC);
       INSTANCE = this;
    }
 

@@ -6,7 +6,7 @@ import me.polarisclient.api.util.path.goal.GoalRadius;
 import me.polarisclient.api.util.path.goal.GoalXZ;
 import me.polarisclient.api.util.path.goal.GoalY;
 import me.polarisclient.mod.commands.Command;
-import me.polarisclient.mod.modules.impl.movement.Pathfind;
+import me.polarisclient.mod.modules.impl.misc.Pathfind;
 import net.minecraft.entity.player.EntityPlayer;
 
 /**
