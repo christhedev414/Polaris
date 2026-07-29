@@ -4,7 +4,6 @@ package me.polarisclient.api.util;
 
 import java.util.Arrays;
 import java.util.List;
-import me.polarisclient.mod.modules.impl.combat.CrystalBot;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockAir;
 import net.minecraft.block.material.Material;
@@ -123,55 +122,6 @@ public class CrystalUtil implements Wrapper {
                )
             == null;
       }
-   }
-
-   public static float calculateDamage(BlockPos blockPos, Entity entity) {
-      return calculateDamage((double)blockPos.getX() + 0.5, (double)(blockPos.getY() + 1), (double)blockPos.getZ() + 0.5, entity);
-   }
-
-   public static float calculateDamage(EntityEnderCrystal entityEnderCrystal, Entity entity) {
-      return calculateDamage(entityEnderCrystal.posX, entityEnderCrystal.posY, entityEnderCrystal.posZ, entity);
-   }
-
-   public static float calculateDamage(double posX, double posY, double posZ, Entity entity) {
-      float doubleExplosionSize = 12.0F;
-      Vec3d entityPosVec = getEntityPosVec(entity, CrystalBot.predictTicks.getValue());
-      double distancedsize = entityPosVec.distanceTo(new Vec3d(posX, posY, posZ)) / (double)doubleExplosionSize;
-      Vec3d vec3d = new Vec3d(posX, posY, posZ);
-      double blockDensity = 0.0;
-
-      try {
-         if (CrystalBot.terrainIgnore.getValue()) {
-            blockDensity = (double)getBlockDensity(
-               vec3d,
-               CrystalBot.predictTicks.getValue() > 0
-                  ? entity.getEntityBoundingBox().offset(getMotionVec(entity, CrystalBot.predictTicks.getValue()))
-                  : entity.getEntityBoundingBox()
-            );
-         } else {
-            blockDensity = (double)entity.world
-               .getBlockDensity(
-                  vec3d,
-                  CrystalBot.predictTicks.getValue() > 0
-                     ? entity.getEntityBoundingBox().offset(getMotionVec(entity, CrystalBot.predictTicks.getValue()))
-                     : entity.getEntityBoundingBox()
-               );
-         }
-      } catch (Exception var19) {
-      }
-
-      double v = (1.0 - distancedsize) * blockDensity;
-      float damage = (float)((int)((v * v + v) / 2.0 * 7.0 * (double)doubleExplosionSize + 1.0));
-      double finald = 1.0;
-      if (entity instanceof EntityLivingBase) {
-         finald = (double)DamageUtil.getBlastReduction(
-            (EntityLivingBase)entity,
-            DamageUtil.getDamageMultiplied(damage),
-            new Explosion(mc.world, mc.player, posX, posY, posZ, 6.0F, false, true)
-         );
-      }
-
-      return (float)finald;
    }
 
    public static RayTraceResult rayTraceBlocks(Vec3d start, Vec3d end) {
@@ -343,119 +293,6 @@ public class CrystalUtil implements Wrapper {
          return (float)j2 / (float)k2;
       } else {
          return 0.0F;
-      }
-   }
-
-   public static Vec3d getMotionVec(Entity entity, int ticks) {
-      double dX = entity.posX - entity.prevPosX;
-      double dZ = entity.posZ - entity.prevPosZ;
-      double entityMotionPosX = 0.0;
-      double entityMotionPosZ = 0.0;
-      if (CrystalBot.collision.getValue()) {
-         for(int i = 1;
-            i <= ticks
-               && mc.world
-                  .getBlockState(new BlockPos(entity.posX + dX * (double)i, entity.posY, entity.posZ + dZ * (double)i))
-                  .getBlock() instanceof BlockAir;
-            ++i
-         ) {
-            entityMotionPosX = dX * (double)i;
-            entityMotionPosZ = dZ * (double)i;
-         }
-      } else {
-         entityMotionPosX = dX * (double)ticks;
-         entityMotionPosZ = dZ * (double)ticks;
-      }
-
-      return new Vec3d(entityMotionPosX, 0.0, entityMotionPosZ);
-   }
-
-   public static Vec3d getEntityPosVec(Entity entity, int ticks) {
-      return entity.getPositionVector().add(getMotionVec(entity, ticks));
-   }
-
-   public static float calculateDamage(Vec3d vec3d, Entity entity) {
-      return calculateDamage(vec3d.x, vec3d.y, vec3d.z, entity);
-   }
-
-   public static boolean rayTracePlace(BlockPos blockPos) {
-      if (CrystalBot.getInstance().directionMode.getValue() != CrystalBot.DirectionMode.VANILLA) {
-         double d = 0.45;
-         double d2 = 0.05;
-         double d3 = 0.95;
-         Vec3d vec3d = new Vec3d(
-            mc.player.posX,
-            mc.player.getEntityBoundingBox().minY + (double)mc.player.getEyeHeight(),
-            mc.player.posZ
-         );
-
-         for(double d4 = d2; d4 <= d3; d4 += d) {
-            for(double d5 = d2; d5 <= d3; d5 += d) {
-               for(double d6 = d2; d6 <= d3; d6 += d) {
-                  Vec3d vec3d2 = new Vec3d(blockPos).add(d4, d5, d6);
-                  double d7 = vec3d.distanceTo(vec3d2);
-                  if (!CrystalBot.getInstance().strictDirection.getValue() || !(d7 > (double)CrystalBot.getInstance().placeRange.getValue().floatValue())) {
-                     double d8 = vec3d2.x - vec3d.x;
-                     double d9 = vec3d2.y - vec3d.y;
-                     double d10 = vec3d2.z - vec3d.z;
-                     double d11 = (double)MathHelper.sqrt(d8 * d8 + d10 * d10);
-                     double[] arrd = new double[]{
-                        (double)MathHelper.wrapDegrees((float)Math.toDegrees(Math.atan2(d10, d8)) - 90.0F),
-                        (double)MathHelper.wrapDegrees((float)(-Math.toDegrees(Math.atan2(d9, d11))))
-                     };
-                     float f = MathHelper.cos((float)(-arrd[0] * (float) (Math.PI / 180.0) - (float) Math.PI));
-                     float f2 = MathHelper.sin((float)(-arrd[0] * (float) (Math.PI / 180.0) - (float) Math.PI));
-                     float f3 = -MathHelper.cos((float)(-arrd[1] * (float) (Math.PI / 180.0)));
-                     float f4 = MathHelper.sin((float)(-arrd[1] * (float) (Math.PI / 180.0)));
-                     Vec3d vec3d3 = new Vec3d((double)(f2 * f3), (double)f4, (double)(f * f3));
-                     Vec3d vec3d4 = vec3d.add(vec3d3.x * d7, vec3d3.y * d7, vec3d3.z * d7);
-                     RayTraceResult rayTraceResult = mc.world.rayTraceBlocks(vec3d, vec3d4, false, false, false);
-                     if (rayTraceResult != null && rayTraceResult.typeOfHit == Type.BLOCK && rayTraceResult.getBlockPos().equals(blockPos)) {
-                        return true;
-                     }
-                  }
-               }
-            }
-         }
-
-         return false;
-      } else {
-         for(EnumFacing enumFacing : EnumFacing.values()) {
-            Vec3d vec3d = new Vec3d(
-               (double)blockPos.getX() + 0.5 + (double)enumFacing.getDirectionVec().getX() * 0.5,
-               (double)blockPos.getY() + 0.5 + (double)enumFacing.getDirectionVec().getY() * 0.5,
-               (double)blockPos.getZ() + 0.5 + (double)enumFacing.getDirectionVec().getZ() * 0.5
-            );
-            RayTraceResult rayTraceResult;
-            if ((
-                  !CrystalBot.getInstance().strictDirection.getValue()
-                     || !(
-                        mc.player.getPositionVector().add(0.0, (double)mc.player.getEyeHeight(), 0.0).distanceTo(vec3d)
-                           > (double)CrystalBot.getInstance().placeRange.getValue().floatValue()
-                     )
-               )
-               && (
-                     rayTraceResult = mc.world
-                        .rayTraceBlocks(
-                           new Vec3d(
-                              mc.player.posX,
-                              mc.player.posY + (double)mc.player.getEyeHeight(),
-                              mc.player.posZ
-                           ),
-                           vec3d,
-                           false,
-                           true,
-                           false
-                        )
-                  )
-                  != null
-               && rayTraceResult.typeOfHit.equals(Type.BLOCK)
-               && rayTraceResult.getBlockPos().equals(blockPos)) {
-               return true;
-            }
-         }
-
-         return false;
       }
    }
 
