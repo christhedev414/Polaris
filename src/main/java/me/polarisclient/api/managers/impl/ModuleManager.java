@@ -39,6 +39,7 @@ import me.polarisclient.mod.modules.impl.combat.AutoReplenish;
 import me.polarisclient.mod.modules.impl.combat.AutoTotem;
 import me.polarisclient.mod.modules.impl.combat.AutoWeb;
 import me.polarisclient.mod.modules.impl.combat.AutoWire;
+import me.polarisclient.mod.modules.impl.combat.BedAura;
 import me.polarisclient.mod.modules.impl.combat.Blocker;
 import me.polarisclient.mod.modules.impl.combat.Burrow;
 import me.polarisclient.mod.modules.impl.combat.CombatSetting;
@@ -407,6 +408,7 @@ public class ModuleManager extends Mod {
       this.modules.add(new FeetPlace());
       this.modules.add(new SelfTrap());
       this.modules.add(new AntiWeak());
+      this.modules.add(new BedAura());
       this.modules.add(new Blocker());
       this.modules.add(new AntiPiston());
       this.modules.add(new CombatSetting());
